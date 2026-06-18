@@ -158,10 +158,9 @@ impl InputMethod {
             }
             Some(s) => s,
         };
-        let mut buf = format!("[{}] ", ctx.menu.page_no);
-        let preedit_begin = buf.len() as std::ffi::c_int;
+        let mut buf = String::new();
         buf.push_str(preedit);
-        let preedit_end = buf.len() as std::ffi::c_int;
+        let cursor = buf.len().try_into().unwrap();
         for (i, candidate) in ctx.menu.candidates.iter().enumerate() {
             let highlighted = i as std::ffi::c_int == ctx.menu.highlighted_candidate_index;
             if highlighted {
@@ -170,7 +169,7 @@ impl InputMethod {
                 buf.push_str(&format!(" {}. {}", i + 1, candidate.text));
             }
         }
-        self.im.set_preedit_string(buf, preedit_begin, preedit_end);
+        self.im.set_preedit_string(buf, cursor, cursor);
     }
     fn handle_key(&mut self, key_raw: u32, key_state: WlWEnum<WlKeyState>) -> bool {
         let key_xkb = xkb::Keycode::new(key_raw + 8);
