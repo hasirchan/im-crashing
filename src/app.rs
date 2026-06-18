@@ -39,6 +39,8 @@ use wayland_protocols_misc::{
     },
 };
 
+const RIME_RELEASE_MASK: u32 = 1 << 30;
+
 fn create_signal_fd(signals: &[std::ffi::c_int]) -> OwnedFd {
     unsafe {
         let mut mask = std::mem::zeroed();
@@ -126,7 +128,7 @@ struct InputMethod {
     kbd_grab: WlIMKbdGrab,
     xkb_keymap: Option<xkb::Keymap>,
     xkb_state: Option<xkb::State>,
-    key_state: HashSet<u32>,
+    key_handled: HashSet<u32>,
     rime_session_id: rime::RimeSessionId,
     serial: u32,
 }
@@ -143,7 +145,7 @@ impl InputMethod {
             event_pending: vec![],
             xkb_keymap: None,
             xkb_state: None,
-            key_state: HashSet::new(),
+            key_handled: HashSet::new(),
             rime_session_id: rime::Rime::create_session(),
             serial: 0,
         }
@@ -171,49 +173,52 @@ impl InputMethod {
         }
         self.im.set_preedit_string(buf, cursor, cursor);
     }
+
     fn handle_key(&mut self, key_raw: u32, key_state: WlWEnum<WlKeyState>) -> bool {
         let key_xkb = xkb::Keycode::new(key_raw + 8);
         let key_final = self.xkb_state.as_mut().unwrap().key_get_one_sym(key_xkb);
-        let track_pressed = match key_state {
+        match key_state {
             WlWEnum::Value(WlKeyState::Pressed) => {
                 self.xkb_state
                     .as_mut()
                     .unwrap()
                     .update_key(key_xkb, xkb::KeyDirection::Down);
-                if !self.activated {
-                    return false;
-                }
-                true
             }
             WlWEnum::Value(WlKeyState::Released) => {
                 self.xkb_state
                     .as_mut()
                     .unwrap()
                     .update_key(key_xkb, xkb::KeyDirection::Up);
-                return self.key_state.remove(&key_raw);
             }
-            WlWEnum::Value(WlKeyState::Repeated) => false,
             _ => return false,
         };
-        let mods = self
-            .xkb_state
-            .as_mut()
-            .unwrap()
+        if !self.activated {
+            return false;
+        }
+
+        let mut mods = self.xkb_state.as_mut().unwrap()
             .serialize_mods(xkb::STATE_MODS_EFFECTIVE | xkb::STATE_LAYOUT_EFFECTIVE);
 
-        if rime::Rime::process_key(&self.rime_session_id, key_final, mods) {
-            self.handle_preedit();
-            if let Some(commit) = rime::Rime::get_commit(&self.rime_session_id) {
-                self.im.commit_string(commit.text);
-            }
-            self.im.commit(self.serial);
-            if track_pressed {
-                self.key_state.insert(key_raw);
-            }
-            return true;
+        if key_state == WlWEnum::Value(WlKeyState::Released) {
+            mods |= RIME_RELEASE_MASK;
         }
-        false
+
+        match rime::Rime::process_key(&self.rime_session_id, key_final, mods) {
+            true => {
+                self.handle_preedit();
+                if let Some(commit) = rime::Rime::get_commit(&self.rime_session_id) {
+                    self.im.commit_string(commit.text);
+                }
+                self.im.commit(self.serial);
+                self.key_handled.insert(key_raw);
+                true
+            }
+            false => {
+                self.key_handled.remove(&key_raw)
+            }
+        }
     }
+
 }
 
 impl Drop for InputMethod {
@@ -311,12 +316,12 @@ impl WlDispatch<WlIM, u32> for AppState {
                     match event {
                         WlIMEvent::Deactivate => {
                             rime::Rime::clear_composition(&im.rime_session_id);
-                            im.key_state.clear();
+                            im.key_handled.clear();
                             im.activated = false;
                         }
                         WlIMEvent::Activate => {
                             rime::Rime::clear_composition(&im.rime_session_id);
-                            im.key_state.clear();
+                            im.key_handled.clear();
                             im.activated = true;
                         }
                         WlIMEvent::ContentType { hint, purpose } => {}
