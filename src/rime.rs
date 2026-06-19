@@ -274,13 +274,11 @@ impl Rime {
         rime_call!(clear_composition, session_id.raw);
     }
 
-    pub fn destroy_session(session_id: &RimeSessionId) {
+    pub fn destroy_session(session_id: &RimeSessionId) -> bool {
         if !Self::is_init() {
             lazy_err!()
         }
-        if rime_call!(destroy_session, session_id.raw) == 0 {
-            lazy_err!()
-        }
+        rime_call!(destroy_session, session_id.raw) == 1
     }
 
     pub fn create_session() -> RimeSessionId {

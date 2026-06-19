@@ -226,7 +226,9 @@ impl InputMethod {
 
 impl Drop for InputMethod {
     fn drop(&mut self) {
-        rime::Rime::destroy_session(&self.rime_session_id);
+        if !rime::Rime::destroy_session(&self.rime_session_id) {
+            lazy_err!();
+        }
         rime::Rime::deinit();
     }
 }
