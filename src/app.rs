@@ -1,5 +1,4 @@
 use crate::rime::{self};
-use xkbcommon::xkb::{self};
 use rustix::{
     buffer::spare_capacity,
     event::epoll,
@@ -38,6 +37,7 @@ use wayland_protocols_misc::{
         zwp_virtual_keyboard_v1::{Event as WlVKEvent, ZwpVirtualKeyboardV1 as WlVK},
     },
 };
+use xkbcommon::xkb::{self};
 
 const RIME_RELEASE_MASK: u32 = 1 << 30;
 
@@ -164,7 +164,10 @@ impl InputMethod {
         buf.push_str(preedit);
         let cursor = buf.len().try_into().unwrap();
         for (i, candidate) in ctx.menu.candidates.iter().enumerate() {
-            let highlighted = i as std::ffi::c_int == ctx.menu.highlighted_candidate_index;
+            let highlighted = i
+                .try_into()
+                .map(|c_int_i: std::ffi::c_int| c_int_i == ctx.menu.highlighted_candidate_index)
+                .unwrap();
             if highlighted {
                 buf.push_str(&format!(" [{}. {}]", i + 1, candidate.text));
             } else {
@@ -196,7 +199,10 @@ impl InputMethod {
             return false;
         }
 
-        let mut mods = self.xkb_state.as_mut().unwrap()
+        let mut mods = self
+            .xkb_state
+            .as_mut()
+            .unwrap()
             .serialize_mods(xkb::STATE_MODS_EFFECTIVE | xkb::STATE_LAYOUT_EFFECTIVE);
 
         if key_state == WlWEnum::Value(WlKeyState::Released) {
@@ -213,12 +219,9 @@ impl InputMethod {
                 self.key_handled.insert(key_raw);
                 true
             }
-            false => {
-                self.key_handled.remove(&key_raw)
-            }
+            false => self.key_handled.remove(&key_raw),
         }
     }
-
 }
 
 impl Drop for InputMethod {
@@ -390,7 +393,7 @@ impl WlDispatch<WlIMKbdGrab, u32> for AppState {
                 let keymap_str = unsafe {
                     let ptr = libc::mmap(
                         std::ptr::null_mut(),
-                        size as usize,
+                        size.try_into().unwrap(),
                         libc::PROT_READ,
                         libc::MAP_PRIVATE,
                         fd.as_raw_fd(),
@@ -400,9 +403,10 @@ impl WlDispatch<WlIMKbdGrab, u32> for AppState {
                         app_state.update_im_map(*seat_name, None, None, None);
                         return;
                     }
-                    let bytes = std::slice::from_raw_parts(ptr as *const u8, size as usize);
+                    let bytes =
+                        std::slice::from_raw_parts(ptr as *const u8, size.try_into().unwrap());
                     let s = std::str::from_utf8(bytes).unwrap().to_owned();
-                    libc::munmap(ptr, size as usize);
+                    libc::munmap(ptr, size.try_into().unwrap());
                     s
                 };
                 let keymap = xkb::Keymap::new_from_string(
