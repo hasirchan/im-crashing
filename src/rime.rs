@@ -1,14 +1,11 @@
 use crate::ffi::rime::{self as raw_rime};
 use std::{
     ffi::{CStr, CString, c_char, c_int},
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    sync::Mutex,
 };
 use xkbcommon::xkb::{self};
 
-static RIME_TRAITS: AtomicPtr<raw_rime::RimeTraits> = AtomicPtr::new(std::ptr::null_mut());
-// overdesigned, but fun
-static RIME_RC: AtomicUsize = AtomicUsize::new(0);
-static RIME_IS_INIT: AtomicBool = AtomicBool::new(false);
+static RIME_STATE: Mutex<(bool, usize)> = Mutex::new((false, 0));
 
 macro_rules! rime_struct_init {
     ($type:ty) => {{
@@ -158,10 +155,10 @@ pub struct Rime;
 
 impl Rime {
     pub fn init() {
-        RIME_RC.fetch_add(1, Ordering::SeqCst);
-        if RIME_IS_INIT.swap(true, Ordering::SeqCst) {
-            return;
-        }
+        let mut state = RIME_STATE.lock().unwrap();
+        state.1 += 1;
+        if state.0 { return; }
+
         let pkg_name = env!("CARGO_PKG_NAME");
         let pkg_version = env!("CARGO_PKG_VERSION");
 
@@ -169,7 +166,6 @@ impl Rime {
         let user_data_dir = format!("{}/.local/share/{}/rime", home, pkg_name);
         let log_dir = format!("{}/.local/share/{}/log", home, pkg_name);
 
-        println!("{}", env!("RIME_SHARED_DATA_DIR"));
         std::fs::create_dir_all(&user_data_dir).ok();
         std::fs::create_dir_all(&log_dir).ok();
 
@@ -189,25 +185,9 @@ impl Rime {
         }
         rime_call!(join_maintenance_thread);
 
-        let traits_raw: *mut raw_rime::RimeTraits = Box::into_raw(Box::new(traits));
-        RIME_TRAITS.store(traits_raw, Ordering::Relaxed);
-    }
+        state.0 = true;
 
-    pub fn deinit() {
-        if !RIME_IS_INIT.load(Ordering::SeqCst) {
-            return;
-        }
-        if RIME_RC.fetch_sub(1, Ordering::SeqCst) - 1 > 0 {
-            return;
-        }
-        let traits_raw = RIME_TRAITS.load(Ordering::Relaxed);
-        if traits_raw.is_null() {
-            return;
-        }
-        rime_call!(cleanup_all_sessions);
-        rime_call!(finalize);
         unsafe {
-            let traits = Box::from_raw(traits_raw);
             if !traits.shared_data_dir.is_null() {
                 drop(CString::from_raw(traits.shared_data_dir as *mut _));
             }
@@ -230,11 +210,20 @@ impl Rime {
                 drop(CString::from_raw(traits.distribution_version as *mut _));
             }
         };
-        RIME_TRAITS.store(std::ptr::null_mut(), Ordering::Relaxed);
+    }
+
+    pub fn deinit() {
+        let mut state = RIME_STATE.lock().unwrap();
+        if !state.0 { return; }
+        state.1 -= 1;
+        if state.1 > 0 { return; }
+        rime_call!(cleanup_all_sessions);
+        rime_call!(finalize);
+        state.0 = false;
     }
 
     fn is_init() -> bool {
-        RIME_IS_INIT.load(Ordering::Relaxed)
+        RIME_STATE.lock().unwrap().0
     }
 
     pub fn get_commit(session_id: &RimeSessionId) -> Option<RimeCommit> {
@@ -291,6 +280,9 @@ impl Rime {
     }
 
     pub fn process_key(session_id: &RimeSessionId, key: xkb::Keysym, mods: xkb::ModMask) -> bool {
+        if !Self::is_init() {
+            lazy_err!()
+        }
         rime_call!(
             process_key,
             session_id.raw,
