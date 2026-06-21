@@ -1,11 +1,11 @@
 use crate::ffi::rime::{self as raw_rime};
 use std::{
     ffi::{CStr, CString, c_char, c_int},
-    sync::Mutex,
+    sync::{Arc, Mutex, Weak},
 };
 use xkbcommon::xkb::{self};
 
-static RIME_STATE: Mutex<(bool, usize)> = Mutex::new((false, 0));
+static RIME: Mutex<Weak<Rime>> = Mutex::new(Weak::new());
 
 macro_rules! rime_struct_init {
     ($type:ty) => {{
@@ -154,10 +154,11 @@ impl From<&raw_rime::RimeContext> for RimeContext {
 pub struct Rime;
 
 impl Rime {
-    pub fn init() {
-        let mut state = RIME_STATE.lock().unwrap();
-        state.1 += 1;
-        if state.0 { return; }
+    pub fn init() -> Arc<Rime> {
+        let mut weak = RIME.lock().unwrap();
+        if let Some(arc) = weak.upgrade() {
+            return arc;
+        }
 
         let pkg_name = env!("CARGO_PKG_NAME");
         let pkg_version = env!("CARGO_PKG_VERSION");
@@ -166,8 +167,8 @@ impl Rime {
         let user_data_dir = format!("{}/.local/share/{}/rime", home, pkg_name);
         let log_dir = format!("{}/.local/share/{}/log", home, pkg_name);
 
-        std::fs::create_dir_all(&user_data_dir).ok();
-        std::fs::create_dir_all(&log_dir).ok();
+        std::fs::create_dir_all(&user_data_dir).unwrap();
+        std::fs::create_dir_all(&log_dir).unwrap();
 
         let mut traits = rime_struct_init!(raw_rime::RimeTraits);
         traits.shared_data_dir = string_to_cstring(env!("RIME_SHARED_DATA_DIR")).into_raw();
@@ -184,8 +185,6 @@ impl Rime {
             lazy_err!()
         }
         rime_call!(join_maintenance_thread);
-
-        state.0 = true;
 
         unsafe {
             if !traits.shared_data_dir.is_null() {
@@ -210,20 +209,14 @@ impl Rime {
                 drop(CString::from_raw(traits.distribution_version as *mut _));
             }
         };
-    }
 
-    pub fn deinit() {
-        let mut state = RIME_STATE.lock().unwrap();
-        if !state.0 { return; }
-        state.1 -= 1;
-        if state.1 > 0 { return; }
-        rime_call!(cleanup_all_sessions);
-        rime_call!(finalize);
-        state.0 = false;
+        let arc = Arc::new(Rime);
+        *weak = Arc::downgrade(&arc);
+        arc
     }
 
     fn is_init() -> bool {
-        RIME_STATE.lock().unwrap().0
+        RIME.lock().unwrap().upgrade().is_some()
     }
 
     pub fn get_commit(session_id: &RimeSessionId) -> Option<RimeCommit> {
@@ -289,5 +282,15 @@ impl Rime {
             key.raw().try_into().unwrap(),
             mods.try_into().unwrap()
         ) == 1
+    }
+}
+
+impl Drop for Rime {
+    fn drop(&mut self) {
+        if !Self::is_init() {
+            return;
+        }
+        rime_call!(cleanup_all_sessions);
+        rime_call!(finalize);
     }
 }

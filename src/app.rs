@@ -4,9 +4,12 @@ use rustix::{
     event::epoll,
     fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
 };
-use std::collections::{
-    HashMap, HashSet,
-    hash_map::{self},
+use std::{
+    collections::{
+        HashMap, HashSet,
+        hash_map::{self},
+    },
+    sync::Arc,
 };
 use wayland_client::{
     Connection as WlConnection, Dispatch as WlDispatch, EventQueue as WlEventQueue,
@@ -130,22 +133,23 @@ struct InputMethod {
     xkb_state: Option<xkb::State>,
     key_handled: HashSet<u32>,
     rime_session_id: rime::RimeSessionId,
+    rime: Arc<rime::Rime>,
     serial: u32,
 }
 
 impl InputMethod {
     fn init(seat: WlSeat, im: WlIM, vk: WlVK, kbd_grab: WlIMKbdGrab) -> Self {
-        rime::Rime::init();
         InputMethod {
             activated: false,
             seat,
             vk,
             im,
-            kbd_grab,
             event_pending: vec![],
+            kbd_grab,
             xkb_keymap: None,
             xkb_state: None,
             key_handled: HashSet::new(),
+            rime: rime::Rime::init(),
             rime_session_id: rime::Rime::create_session(),
             serial: 0,
         }
@@ -229,7 +233,6 @@ impl Drop for InputMethod {
         if !rime::Rime::destroy_session(&self.rime_session_id) {
             lazy_err!();
         }
-        rime::Rime::deinit();
     }
 }
 
