@@ -1,9 +1,4 @@
 fn main() {
-    println!(
-        "cargo:rustc-env=RIME_SHARED_DATA_DIR={}",
-        std::env::var("RIME_SHARED_DATA_DIR").unwrap()
-    );
-
     let lib_definitions = [("rime", "#include <rime_api.h>")];
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     for (lib_name, header_content) in &lib_definitions {

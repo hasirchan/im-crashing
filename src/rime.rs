@@ -171,7 +171,8 @@ impl Rime {
         std::fs::create_dir_all(&log_dir).unwrap();
 
         let mut traits = rime_struct_init!(raw_rime::RimeTraits);
-        traits.shared_data_dir = string_to_cstring(env!("RIME_SHARED_DATA_DIR")).into_raw();
+        traits.shared_data_dir =
+            string_to_cstring(std::env::var("RIME_SHARED_DATA_DIR").unwrap().as_str()).into_raw();
         traits.user_data_dir = string_to_cstring(user_data_dir.as_str()).into_raw();
         traits.app_name = string_to_cstring(format!("rime.{}", pkg_name).as_str()).into_raw();
         traits.log_dir = string_to_cstring(log_dir.as_str()).into_raw();
